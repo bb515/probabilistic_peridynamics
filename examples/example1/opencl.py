@@ -5,6 +5,12 @@ Created on Sun Nov 10 16:25:58 2019
 """
 
 import sys
+
+sys.path.insert(1, '../../peridynamics')
+sys.path.insert(1, '../../peridynamics/fem')
+sys.path.insert(1, '../../peridynamics/kernels')
+sys.path.insert(1, '../../peridynamics/post_processing')
+
 from OpenCLPeriVectorized import SeqModel as MODEL
 import numpy as np
 import vtk as vtk
@@ -19,9 +25,10 @@ class simpleSquare(MODEL):
         # verbose
         self.v = True
         # TODO remove dim
-        self.dim = 2
+        self.dim = 3
 
-        self.meshFileName = 'test.msh'
+        self.meshFileName = '3300beam.msh'
+        self.networkFileName = 'Network.vtk'
 
         self.meshType = 2
         self.boundaryType = 1
@@ -39,17 +46,26 @@ class simpleSquare(MODEL):
         self.loadRate = np.double(0.00001)
         self.crackLength = np.double(0.3)
         self.dt = np.double(1e-3)
+        self.max_reaction = 10
+        self.volume_total = 3.0 * 0.6 * 0.25
+        self.load_scale_rate = 0.01
 
         # These parameters will eventually be passed to model via command line
         # arguments
-        self.readMesh(self.meshFileName)
+        self.read_mesh(self.meshFileName)
 
         # No. coordinate dimensions
         self.DPN = np.intc(3)
         self.PD_DPN_NODE_NO = np.intc(self.DPN * self.nnodes)
 
         st = time.time()
-        self.setNetwork(self.PD_HORIZON)
+        
+        # If the network has already been written to file, then read, if not, setNetwork
+        try:
+            self.read_network(self.networkFileName)
+        except:
+            self.setNetwork(self.PD_HORIZON)
+            
         print(
             "Building horizons took {} seconds. Horizon length: {}".format(
                 (time.time() - st), self.MAX_HORIZON_LENGTH))
@@ -59,23 +75,91 @@ class simpleSquare(MODEL):
         self.bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
         self.bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
 
-        # Find the boundary nodes
-        # -1 for LHS and +1 for RHS. 0 for NOT ON BOUNDARY
+        # Find the boundary nodes and apply the displacement values
         for i in range(0, self.nnodes):
-            bnd = self.findBoundary(self.coords[i][:])
+            bnd = self.findDisplacementBoundary(self.coords[i][:])
             self.bctypes[i, 0] = np.intc((bnd))
             self.bctypes[i, 1] = np.intc((bnd))
             self.bctypes[i, 2] = np.intc((bnd))
             self.bcvalues[i, 0] = np.float64(bnd * 0.5 * self.loadRate)
-
-    def findBoundary(self, x):
+        
+        self.force_bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
+        self.force_bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
+        
+        # Find the force boundary nodes and find amount of boundary nodes
+        num_force_bc_nodes = 0
+        for i in range(0, self.nnodes):
+            bnd = self.findForceBoundary(self.coords[i][:])
+            if bnd == -1:
+                num_force_bc_nodes += 1
+            elif bnd == 1:
+                num_force_bc_nodes += 1
+            self.force_bctypes[i, 0] = np.intc((bnd))
+            self.force_bctypes[i, 1] = np.intc((bnd))
+            self.force_bctypes[i, 2] = np.intc((bnd))
+            
+        self.num_force_bc_nodes = num_force_bc_nodes
+        
+        # Calculate initial forces
+        self.force_bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
+        load_scale = 0.0
+        for i in range(0, self.nnodes):
+            bnd = self.findForceBoundary(self.coords[i][:])
+            if bnd == 1:
+                pass
+            elif bnd == -1:
+                self.force_bcvalues[i, 2] = np.float64(1.* bnd * self.max_reaction * load_scale / (self.num_force_bc_nodes * self.volume_total))
+        
+        print("number of boundary nodes", num_force_bc_nodes)
+        print("total volume", self.total_volume)
+        print("volume total", self.volume_total)
+                       
+    def findDisplacementBoundary(self, x):
         # Function which marks constrain particles
-        # Does not live on a boundary
-        bnd = 0
-        if x[0] < 1.5 * self.PD_HORIZON:
+        # 2 == NO BOUNDARY CONDITION (the number here is an arbitrary choice)
+        # -1 == DISPLACEMENT LOADED IN -ve direction
+        #  1 == DISPLACEMENT LOADED IN +ve direction
+        #  0 == FIXED (DIRICHLET) BOUNDARY
+        if self.meshFileName == 'test.msh':
+            # Does not live on a boundary
+            bnd = 2
+            # Does live on boundary
+            if x[0] < 1.5 * self.PD_HORIZON:
+                bnd = 0
+
+            #elif x[0] > 3.0 - 1.5 * self.PD_HORIZON:
+                #bnd = 1
+        elif self.meshFileName == '3300beam.msh':
+            # Does not live on a bondary
+            bnd = 2
+            # Does live on boundary
+            if x[0] < 1.5 * self.PD_HORIZON:
+                bnd = 0           
+        return bnd
+    
+    def findForceBoundary(self, x):
+        # Function which marks body force loaded particles
+        
+        # 2 == NO BOUNDARY CONDITION (the number here is an arbitrary choice)
+        # -1 == FORCE LOADED IN -ve direction
+        #  1 == FORCE LOADED IN +ve direction
+        
+        if self.meshFileName == 'test.msh':
+            # Does not live on a bondary
+            bnd = 2
+            if x[0] > 1.0 - 1.5 * self.PD_HORIZON:
+                bnd = 1
+        elif self.meshFileName == '3300beam.msh':
+            # Does not live on a bondary
             bnd = -1
-        elif x[0] > 1.0 - 1.5 * self.PD_HORIZON:
-            bnd = 1
+# =============================================================================
+#             delta = 1e-6
+#             if x[2] > 0.6 - delta:
+#                 bnd = -1
+# =============================================================================
+                
+        
+            
         return bnd
 
     def isCrack(self, x, y):
@@ -140,9 +224,10 @@ def noise(L, samples, num_nodes):
     return np.transpose(noise)
 
 
-def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
+def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
+    
     print("Peridynamic Simulation -- Starting")
-
+    
     # Initializing OpenCL
     context = cl.create_some_context()
     queue = cl.CommandQueue(context)
@@ -184,13 +269,15 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
     print(h_horizons_lengths.dtype, "dtype")
 
     # Nodal coordinates
-    h_coords = myModel.coords
-
-    # Boundary conditions types and delta values
+    h_coords = np.ascontiguousarray(myModel.coords, dtype=np.float64)
+    
+    # Displacement boundary conditions types and delta values
     h_bctypes = myModel.bctypes
     h_bcvalues = myModel.bcvalues
-
-    print(h_bctypes)
+    
+    # Force boundary conditions types and values
+    h_force_bctypes = myModel.force_bctypes
+    h_force_bcvalues = myModel.force_bcvalues
 
     # Nodal volumes
     h_vols = myModel.V
@@ -209,6 +296,8 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
     # Print the dtypes
     print("horizons", h_horizons.dtype)
     print("horizons_length", h_horizons_lengths.dtype)
+    print("force_bctypes", h_bctypes.dtype)
+    print("force_bcvalues", h_bcvalues.dtype)
     print("bctypes", h_bctypes.dtype)
     print("bcvalues", h_bcvalues.dtype)
     print("coords", h_coords.dtype)
@@ -231,6 +320,12 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
     d_bcvalues = cl.Buffer(context,
                            cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
                            hostbuf=h_bcvalues)
+    d_force_bctypes = cl.Buffer(context,
+                          cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                          hostbuf=h_force_bctypes)
+    d_force_bcvalues = cl.Buffer(context,
+                           cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                           hostbuf=h_force_bcvalues)
     d_vols = cl.Buffer(context,
                        cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
                        hostbuf=h_vols)
@@ -254,7 +349,7 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
     cl_kernel_time_marching_1.set_scalar_arg_dtypes(
         [None, None, None, None, None, None])
     cl_kernel_time_marching_2.set_scalar_arg_dtypes(
-        [None, None, None, None, None])
+        [None, None, None, None, None, None, None])
     cl_kernel_time_marching_3.set_scalar_arg_dtypes([None, None, None, None])
     cl_kernel_check_bonds.set_scalar_arg_dtypes([None, None, None])
     cl_kernel_calculate_damage.set_scalar_arg_dtypes([None, None, None])
@@ -272,7 +367,7 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
 
         # Time marching Part 2
         cl_kernel_time_marching_2(queue, (myModel.nnodes,), None, d_udn1,
-                                  d_un1, d_vols, d_horizons, d_coords)
+                                  d_un1, d_vols, d_horizons, d_coords, d_force_bctypes, d_force_bcvalues)
 
         # Time marching Part 3
         # cl_kernel_time_marching_3(queue, (myModel.DPN * myModel.nnodes,),
@@ -290,8 +385,23 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
             cl.enqueue_copy(queue, h_damage, d_damage)
             cl.enqueue_copy(queue, h_un1, d_un1)
             print("Sum of all damage is", np.sum(h_damage))
-            vtk.write("U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
+            vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
                       myModel.coords, h_damage, h_un1)
+        
+        # update the host force_bcvalues
+        h_force_bcvalues = np.zeros((myModel.nnodes, myModel.DPN), dtype=np.float64)
+        load_scale = min(1.0, myModel.load_scale_rate * t)
+        for i in range(0, myModel.nnodes):
+            bnd = myModel.findForceBoundary(myModel.coords[i][:])
+            if bnd == 1:
+                pass
+            elif bnd == -1:
+                h_force_bcvalues[i, 2] = np.float64(1.* bnd * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes * myModel.volume_total))
+        
+        # update the GPU force_bcvalues
+        d_force_bcvalues = cl.Buffer(context,
+                           cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                           hostbuf=h_force_bcvalues)
 
         print('Timestep {} complete in {} s '.format(t, time.time() - st))
 
@@ -300,9 +410,9 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=10):
                                d_horizons, d_horizons_lengths)
     cl.enqueue_copy(queue, h_damage, d_damage)
     cl.enqueue_copy(queue, h_un, d_un)
-    vtk.write("U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
+    vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
               myModel.coords, h_damage, h_un)
-    return vtk.write("U_"+"sample"+str(sample)+".vtk",
+    return vtk.write("output/U_"+"sample"+str(sample)+".vtk",
                      "Solution time step = "+str(t), myModel.coords, h_damage,
                      h_un)
 
@@ -316,6 +426,7 @@ def main():
     st = time.time()
     thisModel = simpleSquare()
     no_samples = 1
+    
     for s in range(no_samples):
         sim(s, thisModel)
     print('TOTAL TIME REQUIRED {}'.format(time.time() - st))

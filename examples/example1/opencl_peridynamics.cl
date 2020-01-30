@@ -49,19 +49,21 @@ __kernel void
 
 	if (i < PD_DPN_NODE_NO)
 	{
-		Un1[i] = BCTypes[i] == 0 ? Un1[i] + PD_DT * (Udn1[i]) : Un1[i] + BCValues[i] ;
+		Un1[i] = BCTypes[i] == 2 ? Un1[i] + PD_DT * (Udn1[i]) : Un1[i] + BCValues[i] ;
 	}
 }
 
 
-// Calculate force using un1
+// Calculate force using un1, force BC applied at end here
 __kernel void
 	TimeMarching2(
         __global double *Udn1,
         __global double const *Un1,
         __global double const *Vols,
 		__global int const *Horizons,
-		__global double const *Nodes
+		__global double const *Nodes,
+		__global int const *FCTypes,
+		__global double const *FCValues
 	)
 {
 	const int i = get_global_id(0);
@@ -89,7 +91,7 @@ __kernel void
 
 				const double xi = sqrt(xi_x * xi_x + xi_y * xi_y + xi_z * xi_z);
 				const double y = sqrt(xi_eta_x * xi_eta_x + xi_eta_y * xi_eta_y + xi_eta_z * xi_eta_z);
-                const double y_xi = y - xi;
+                const double y_xi = (y - xi) < 0.00 ? 0.00: (y-xi);
 
 				const double cx = xi_eta_x / y;
 				const double cy = xi_eta_y / y;
@@ -107,6 +109,12 @@ __kernel void
 			}
 		}
 
+		// Final result
+
+		f0 = (FCTypes[DPN*i + 0] == 2 ? f0 : f0 + FCValues[DPN * i + 0]);
+		f1 = (FCTypes[DPN*i + 1] == 2 ? f1 : f1 + FCValues[DPN * i + 1]);
+		f2 = (FCTypes[DPN*i + 2] == 2 ? f2 : f2 + FCValues[DPN * i + 2]);
+		
 		Udn1[DPN * i + 0] = f0;
 		Udn1[DPN * i + 1] = f1;
 		Udn1[DPN * i + 2] = f2;

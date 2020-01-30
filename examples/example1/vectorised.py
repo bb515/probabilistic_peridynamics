@@ -68,6 +68,7 @@ class simpleSquare(MODEL):
             bnd = -1
         elif x[0] > 1.0 - 1.5 * self.horizon:
             bnd = 1
+        
         return bnd
 
     def isCrack(self, x, y):
