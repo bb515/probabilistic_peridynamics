@@ -71,7 +71,8 @@ class SeqModel:
                 iline += 1
                 line = f.readline()
                 horizons_lengths[i] = np.intc(line.split())
-            
+                
+            print('Building family matrix from file')
             # Now read family matrix
             find_family = 0
             while (find_family == 0):
@@ -91,7 +92,51 @@ class SeqModel:
                 family.append(np.zeros(len(rowAsList), dtype=np.intc))
                 for j in range(0, len(rowAsList)):
                     family[i][j] = np.intc(rowAsList[j])
-
+            
+            print('Finding stiffness values')
+            # Now read stiffness values
+            find_stiffness = 0
+            while (find_stiffness == 0):
+                iline += 1
+                line = f.readline()
+                row = line.strip()
+                rowAsList = row.split()
+                
+                find_stiffness = 1 if 'STIFFNESS' in rowAsList else 0
+            print('Building stiffnesses from file')
+            
+            bond_stiffness_family = []
+            for i in range(nnodes):
+                iline += 1
+                line = f.readline()
+                row = line.strip()
+                rowAsList = line.split()
+                bond_stiffness_family.append(np.zeros(len(rowAsList), dtype=np.float64))
+                for j in range(0, len(rowAsList)):
+                    bond_stiffness_family[i][j] = (rowAsList[j])
+            
+            print('Finding critical stretch values')
+            # Now read critcal stretch values
+            find_stretch = 0
+            while (find_stretch == 0):
+                iline += 1
+                line = f.readline()
+                row = line.strip()
+                rowAsList = row.split()
+                
+                find_stretch = 1 if 'STRETCH' in rowAsList else 0
+            
+            print('Building critical stretch values from file')
+            bond_critical_stretch_family = []
+            for i in range(nnodes):
+                iline += 1
+                line = f.readline()
+                row = line.strip()
+                rowAsList = line.split()
+                bond_critical_stretch_family.append(np.zeros(len(rowAsList), dtype=np.float64))
+                for j in range(0, len(rowAsList)):
+                    bond_critical_stretch_family[i][j] = rowAsList[j]
+            
             # Maximum number of nodes that any one of the nodes is connected to
             MAX_HORIZON_LENGTH_CHECK = np.intc(
                 len(max(family, key=lambda x: len(x)))
@@ -102,9 +147,19 @@ class SeqModel:
             horizons = -1 * np.ones([nnodes, MAX_HORIZON_LENGTH])
             for i, j in enumerate(family):
                 horizons[i][0:len(j)] = j
+                
+            bond_stiffness = -1. * np.ones([nnodes, MAX_HORIZON_LENGTH])
+            for i, j in enumerate(bond_stiffness_family):
+                bond_stiffness[i][0:len(j)] = j
+            
+            bond_critical_stretch = -1. * np.ones([nnodes, MAX_HORIZON_LENGTH])
+            for i, j in enumerate(bond_critical_stretch_family):
+                bond_critical_stretch[i][0:len(j)] = j
 
             # Make sure it is in a datatype that C can handle
             self.horizons = horizons.astype(np.intc)
+            self.bond_stiffness = bond_stiffness
+            self.bond_critical_stretch = bond_critical_stretch
             
             self.horizons_lengths = horizons_lengths
             self.family = family
@@ -205,6 +260,8 @@ class SeqModel:
 
         # Container for nodal family
         family = []
+        bond_stiffness_family = []
+        bond_critical_stretch_family = []
 
         # Container for number of nodes (including self) that each of the nodes
         # is connected to
@@ -213,20 +270,43 @@ class SeqModel:
         for i in range(0, self.nnodes):
             print('node', i, 'networking...')
             tmp = []
-
+            tmp2 = []
+            tmp3 = []
             for j in range(0, self.nnodes):
                 if i != j:
                     l2_sqr = func.l2_sqr(self.coords[i, :], self.coords[j, :])
                     if np.sqrt(l2_sqr) < horizon:
                         tmp.append(j)
+                        # Determine the material properties for that bond
+                        material_flag = self.bond_type(self.coords[i, :], self.coords[j, :])
+                        if material_flag == 'steel':
+                            tmp2.append(self.PD_E_STEEL)
+                            tmp3.append(self.PD_S0_STEEL)
+                        elif material_flag == 'interface':
+                            tmp2.append(self.PD_E_CONCRETE) # choose the weakest stiffness of the two bond types
+                            tmp3.append(self.PD_S0_CONCRETE * 3.0) # 3.0 is used for interface bonds in the literature
+                        elif material_flag == 'concrete':
+                            tmp2.append(self.PD_E_CONCRETE)
+                            tmp3.append(self.PD_S0_CONCRETE)
+                        
             family.append(np.zeros(len(tmp), dtype=np.intc))
+            bond_stiffness_family.append(np.zeros(len(tmp2), dtype=np.float64))
+            bond_critical_stretch_family.append(np.zeros(len(tmp3), dtype=np.float64))
+            
+            
             self.horizons_lengths[i] = np.intc((len(tmp)))
             for j in range(0, len(tmp)):
                 family[i][j] = np.intc(tmp[j])
+                bond_stiffness_family[i][j] = np.float64(tmp2[j])
+                bond_critical_stretch_family[i][j] = np.float64(tmp3[j])
         
         assert len(family) == self.nnodes
         # As numpy array
         self.family = np.array(family)
+        
+        # Do the bond critical ste
+        self.bond_critical_stretch_family = np.array(bond_critical_stretch_family)
+        self.bond_stiffness_family = np.array(bond_stiffness_family)
         
         # Maximum number of nodes that any one of the nodes is connected to
         self.MAX_HORIZON_LENGTH = np.intc(
@@ -236,10 +316,20 @@ class SeqModel:
         horizons = -1 * np.ones([self.nnodes, self.MAX_HORIZON_LENGTH])
         for i, j in enumerate(self.family):
             horizons[i][0:len(j)] = j
+            
+        bond_stiffness = -1. * np.ones([self.nnodes, self.MAX_HORIZON_LENGTH])
+        for i, j in enumerate(self.bond_stiffness_family):
+            bond_stiffness[i][0:len(j)] = j
+            
+        bond_critical_stretch = -1. * np.ones([self.nnodes, self.MAX_HORIZON_LENGTH])
+        for i, j in enumerate(self.bond_critical_stretch_family):
+            bond_critical_stretch[i][0:len(j)] = j
 
         # Make sure it is in a datatype that C can handle
         self.horizons = horizons.astype(np.intc)
-
+        self.bond_stiffness = bond_stiffness
+        self.bond_critical_stretch = bond_critical_stretch
+        
         # Initiate crack
         for i in range(0, self.nnodes):
 
@@ -248,4 +338,4 @@ class SeqModel:
                 if self.isCrack(self.coords[i, :], self.coords[j, :]):
                     self.horizons[i][k] = np.intc(-1)
         vtk.writeNetwork("Network"+".vtk", "Network",
-                      self.MAX_HORIZON_LENGTH, self.horizons_lengths, self.family)
+                      self.MAX_HORIZON_LENGTH, self.horizons_lengths, self.family, self.bond_stiffness_family, self.bond_critical_stretch_family)

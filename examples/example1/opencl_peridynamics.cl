@@ -62,6 +62,7 @@ __kernel void
         __global double const *Vols,
 		__global int const *Horizons,
 		__global double const *Nodes,
+		__global double const *Stiffnesses,
 		__global int const *FCTypes,
 		__global double const *FCValues
 	)
@@ -97,7 +98,7 @@ __kernel void
 				const double cy = xi_eta_y / y;
 				const double cz = xi_eta_z / y;
 
-				const double _E = PD_E;
+				const double _E = Stiffnesses[MAX_HORIZON_LENGTH * i + j];
                 const double _A = Vols[i];
 				const double _L = xi;
 
@@ -111,9 +112,9 @@ __kernel void
 
 		// Final result
 
-		f0 = (FCTypes[DPN*i + 0] == 2 ? f0 : f0 + FCValues[DPN * i + 0]);
-		f1 = (FCTypes[DPN*i + 1] == 2 ? f1 : f1 + FCValues[DPN * i + 1]);
-		f2 = (FCTypes[DPN*i + 2] == 2 ? f2 : f2 + FCValues[DPN * i + 2]);
+		f0 = (FCTypes[DPN*i + 0] == 2 ? f0 : f0 - FCValues[DPN * i + 0]);
+		f1 = (FCTypes[DPN*i + 1] == 2 ? f1 : f1 - FCValues[DPN * i + 1]);
+		f2 = (FCTypes[DPN*i + 2] == 2 ? f2 : f2 - FCValues[DPN * i + 2]);
 		
 		Udn1[DPN * i + 0] = f0;
 		Udn1[DPN * i + 1] = f1;
@@ -145,7 +146,8 @@ __kernel void
 	CheckBonds(
 		__global int *Horizons,
 		__global double const *Un1,
-		__global double const *Nodes
+		__global double const *Nodes,
+		__global double const *FailStretches
 	)
 {
 	const int i = get_global_id(0);
@@ -167,6 +169,8 @@ __kernel void
 
 			const double xi = sqrt(xi_x * xi_x + xi_y * xi_y + xi_z * xi_z);
 			const double y = sqrt(xi_eta_x * xi_eta_x + xi_eta_y * xi_eta_y + xi_eta_z * xi_eta_z);
+
+			const double PD_S0 = FailStretches[i * MAX_HORIZON_LENGTH + j];
 
 			const double s = (y - xi) / xi;
 

@@ -35,20 +35,44 @@ class simpleSquare(MODEL):
         self.numBoundaryNodes = 2
         self.numMeshNodes = 3
 
-        # Material Parameters from classical material model
-        self.PD_HORIZON = np.double(0.1)
-        self.PD_K = np.double(0.05)
-        self.PD_S0 = np.double(0.005)
-        self.PD_E = np.double(
-            (18.00 * self.PD_K) / (np.pi * np.power(self.PD_HORIZON, 4)))
+        # Concrete Parameters from classical material model
+        self.PD_HORIZON = 0.138 # TODO: check this value
+        
+        self.PD_POISSON_CONCRETE = 0.2
+        self.PD_YOUNGS_CONCRETE = 1.*22e9
+        self.PD_G_CONCRETE = 8.8e9
+        self.PD_DENSITY_CONCRETE = 2400.0
+        self.PD_CRIT_TSTRAIN_CONCRETE = 0.000533 # What is this value for?
+        
+        self.PD_K_CONCRETE = np.double(
+                self.PD_YOUNGS_CONCRETE / ((1 - 2* self.PD_POISSON_CONCRETE)*(1 + self.PD_POISSON_CONCRETE)))
+        self.PD_E_CONCRETE = np.double(
+            (12.00 * self.PD_K_CONCRETE) / (np.pi * np.power(self.PD_HORIZON, 4))) # TODO check that should be 12 and not 18, and check that delta is actually the material horizon
+        
+        self.PD_S0_CONCRETE = 0.000533 # check this value
+        
+        self.PD_POISSON_STEEL = 0.3
+        self.PD_YOUNGS_STEEL = 1.*210e9
+        self.PD_G_STEEL = 78e9
+        self.PD_DENSITY_STEEL = 8000.0
+        self.PD_CRIT_TSTRAIN_STEEL = 0.01 # What is this value for?
+        
+        self.PD_K_STEEL = np.double(
+                self.PD_YOUNGS_STEEL / ((1 - 2* self.PD_POISSON_STEEL)*(1 + self.PD_POISSON_STEEL)))
+        self.PD_E_STEEL = np.double(
+            (12.00 * self.PD_K_STEEL) / (np.pi * np.power(self.PD_HORIZON, 4))) # check that delta is actually the material horizon
+        
+        self.PD_S0_STEEL = 0.01 # check this value
+        
+        # TODO check that horizon is the same for both materials
 
         # User input parameters
         self.loadRate = np.double(0.00001)
         self.crackLength = np.double(0.3)
         self.dt = np.double(1e-3)
-        self.max_reaction = 10
+        self.max_reaction = 0.1
         self.volume_total = 3.0 * 0.6 * 0.25
-        self.load_scale_rate = 0.01
+        self.load_scale_rate = 0.000001
 
         # These parameters will eventually be passed to model via command line
         # arguments
@@ -71,6 +95,7 @@ class simpleSquare(MODEL):
                 (time.time() - st), self.MAX_HORIZON_LENGTH))
         # self.setH() # Will further optimise the code, TODO
         self.setVolume()
+        
 
         self.bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
         self.bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
@@ -120,7 +145,7 @@ class simpleSquare(MODEL):
         # -1 == DISPLACEMENT LOADED IN -ve direction
         #  1 == DISPLACEMENT LOADED IN +ve direction
         #  0 == FIXED (DIRICHLET) BOUNDARY
-        if self.meshFileName == 'test.msh':
+        if self.meshFileName == 'test.msh' or 'debug3D.msh' or 'debug3D2.msh':
             # Does not live on a boundary
             bnd = 2
             # Does live on boundary
@@ -144,7 +169,7 @@ class simpleSquare(MODEL):
         # -1 == FORCE LOADED IN -ve direction
         #  1 == FORCE LOADED IN +ve direction
         
-        if self.meshFileName == 'test.msh':
+        if self.meshFileName == 'test.msh' or 'debug3D.msh' or 'debug3D2.msh':
             # Does not live on a bondary
             bnd = 2
             if x[0] > 1.0 - 1.5 * self.PD_HORIZON:
@@ -157,11 +182,50 @@ class simpleSquare(MODEL):
 #             if x[2] > 0.6 - delta:
 #                 bnd = -1
 # =============================================================================
-                
-        
-            
         return bnd
 
+    def isRebar(self, p):
+        """ Function to determine whether the node coordinate is rebar
+        """
+        p = p[1:] # y and z coordinates for this node
+        bar_centers = [
+            # Compressive bars
+            np.array((0.031, 0.031)),
+            np.array((0.219, 0.031)),
+
+            # Tensile bars
+            np.array((0.03825, 0.569)),
+            np.array((0.21175, 0.569))]
+
+        rad_c = 0.006
+        rad_t = 0.01325
+
+        radii = [
+            rad_c,
+            rad_c,
+            rad_t,
+            rad_t]
+
+        costs = [ np.sum(np.square(cent - p) - (np.square(rad))) for cent, rad in zip(bar_centers, radii) ]
+        if any( c <= 0 for c in costs ):
+            return True
+        else:
+            return False
+        
+        
+        
+    def bond_type(self, x, y):
+        output = 0 # default to concrete
+        bool1 = self.isRebar(x)
+        bool2 = self.isRebar(y)
+        if bool1 and bool2:
+            output = 'steel'
+        elif bool1 != bool2:
+            output = 'interface'
+        else:
+            output = 'concrete'
+        return output
+        
     def isCrack(self, x, y):
         output = 0
         p1 = x
@@ -245,9 +309,7 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
         + "-DPD_DPN_NODE_NO=" + str(myModel.PD_DPN_NODE_NO) + SEP
         + "-DPD_NODE_NO=" + str(myModel.nnodes) + SEP
         + "-DMAX_HORIZON_LENGTH=" + str(myModel.MAX_HORIZON_LENGTH) + SEP
-        + "-DPD_DT=" + str(myModel.dt) + SEP
-        + "-DPD_E=" + str(myModel.PD_E) + SEP
-        + "-DPD_S0=" + str(myModel.PD_S0))
+        + "-DPD_DT=" + str(myModel.dt) + SEP)
 
     program = cl.Program(context, kernelsource).build([options_string])
     cl_kernel_initial_values = program.InitialValues
@@ -281,6 +343,10 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
 
     # Nodal volumes
     h_vols = myModel.V
+    
+    # Bond stiffnesses
+    h_bond_stiffness =  np.ascontiguousarray(myModel.bond_stiffness, dtype=np.float64)
+    h_bond_critical_stretch = np.ascontiguousarray(myModel.bond_critical_stretch, dtype=np.float64)
 
     # Displacements
     h_un = np.empty((myModel.nnodes, myModel.DPN), dtype=np.float64)
@@ -329,6 +395,12 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
     d_vols = cl.Buffer(context,
                        cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
                        hostbuf=h_vols)
+    d_bond_stiffness = cl.Buffer(context,
+                       cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                       hostbuf=h_bond_stiffness)
+    d_bond_critical_stretch = cl.Buffer(context,
+                       cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                       hostbuf=h_bond_critical_stretch)
     d_horizons_lengths = cl.Buffer(
             context, cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
             hostbuf=h_horizons_lengths)
@@ -349,9 +421,9 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
     cl_kernel_time_marching_1.set_scalar_arg_dtypes(
         [None, None, None, None, None, None])
     cl_kernel_time_marching_2.set_scalar_arg_dtypes(
-        [None, None, None, None, None, None, None])
+        [None, None, None, None, None, None, None, None])
     cl_kernel_time_marching_3.set_scalar_arg_dtypes([None, None, None, None])
-    cl_kernel_check_bonds.set_scalar_arg_dtypes([None, None, None])
+    cl_kernel_check_bonds.set_scalar_arg_dtypes([None, None, None, None])
     cl_kernel_calculate_damage.set_scalar_arg_dtypes([None, None, None])
 
     global_size = int(myModel.DPN * myModel.nnodes)
@@ -367,7 +439,7 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
 
         # Time marching Part 2
         cl_kernel_time_marching_2(queue, (myModel.nnodes,), None, d_udn1,
-                                  d_un1, d_vols, d_horizons, d_coords, d_force_bctypes, d_force_bcvalues)
+                                  d_un1, d_vols, d_horizons, d_coords, d_bond_stiffness, d_force_bctypes, d_force_bcvalues)
 
         # Time marching Part 3
         # cl_kernel_time_marching_3(queue, (myModel.DPN * myModel.nnodes,),
@@ -376,7 +448,7 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
         # Check for broken bonds
         cl_kernel_check_bonds(queue,
                               (myModel.nnodes, myModel.MAX_HORIZON_LENGTH),
-                              None, d_horizons, d_un1, d_coords)
+                              None, d_horizons, d_un1, d_coords, d_bond_critical_stretch)
 
         if t % print_every == 0:
             cl_kernel_calculate_damage(queue, (myModel.nnodes,), None,
@@ -388,15 +460,17 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
             vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
                       myModel.coords, h_damage, h_un1)
         
-        # update the host force_bcvalues
-        h_force_bcvalues = np.zeros((myModel.nnodes, myModel.DPN), dtype=np.float64)
         load_scale = min(1.0, myModel.load_scale_rate * t)
-        for i in range(0, myModel.nnodes):
-            bnd = myModel.findForceBoundary(myModel.coords[i][:])
-            if bnd == 1:
-                pass
-            elif bnd == -1:
-                h_force_bcvalues[i, 2] = np.float64(1.* bnd * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes * myModel.volume_total))
+        temp_value = -1. * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes * myModel.volume_total)
+        # update the host force_bcvalues
+        h_force_bcvalues = temp_value * np.ones((myModel.nnodes, myModel.DPN), dtype=np.float64)
+
+# =============================================================================
+#         for i in range(0, myModel.nnodes):
+#             bnd = myModel.findForceBoundary(myModel.coords[i][:])
+#             if bnd == -1:
+#                 h_force_bcvalues[i, 2] = np.float64(temp_value)
+# =============================================================================
         
         # update the GPU force_bcvalues
         d_force_bcvalues = cl.Buffer(context,

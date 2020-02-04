@@ -30,7 +30,7 @@ def write(fileName, title, coords, Damage, U):
 
     f.close()
 
-def writeNetwork(fileName, title, max_horizon_length, horizons_lengths, family):
+def writeNetwork(fileName, title, max_horizon_length, horizons_lengths, family, bond_stiffnesses_family, bond_critical_stretch_family):
     f = open(fileName, "w")
 
     f.write("# vtk DataFile Version 2.0\n")
@@ -62,6 +62,20 @@ def writeNetwork(fileName, title, max_horizon_length, horizons_lengths, family):
         tmp = family[i]
         for j in range(0, len(tmp)):
             f.write("{:d} ".format(np.intc(tmp[j])))
+        f.write("\n")
+        
+    f.write("STIFFNESS \n")
+    for i in range(0, np.shape(family)[0]):
+        tmp = bond_stiffnesses_family[i]
+        for j in range(0, len(tmp)):
+            f.write("{:f} ".format(tmp[j]))
+        f.write("\n")
+    
+    f.write("STRETCH \n")
+    for i in range(0, np.shape(family)[0]):
+        tmp = bond_critical_stretch_family[i]
+        for j in range(0, len(tmp)):
+            f.write("{:f} ".format(tmp[j]))
         f.write("\n")
 
     f.close()
