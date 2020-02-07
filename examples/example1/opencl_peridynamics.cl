@@ -112,8 +112,8 @@ __kernel void
 
 		// Final result
 
-		f0 = (FCTypes[DPN*i + 0] == 2 ? f0 : f0 - FCValues[DPN * i + 0]);
-		f1 = (FCTypes[DPN*i + 1] == 2 ? f1 : f1 - FCValues[DPN * i + 1]);
+		f0 = (FCTypes[DPN*i + 0] == 2 ? f0 : f0); //- FCValues[DPN * i + 0]);
+		f1 = (FCTypes[DPN*i + 1] == 2 ? f1 : f1); //- FCValues[DPN * i + 1]);
 		f2 = (FCTypes[DPN*i + 2] == 2 ? f2 : f2 - FCValues[DPN * i + 2]);
 		
 		Udn1[DPN * i + 0] = f0;

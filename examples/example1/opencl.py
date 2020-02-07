@@ -42,37 +42,32 @@ class simpleSquare(MODEL):
         self.PD_YOUNGS_CONCRETE = 1.*22e9
         self.PD_G_CONCRETE = 8.8e9
         self.PD_DENSITY_CONCRETE = 2400.0
-        self.PD_CRIT_TSTRAIN_CONCRETE = 0.000533 # What is this value for?
-        
         self.PD_K_CONCRETE = np.double(
                 self.PD_YOUNGS_CONCRETE / ((1 - 2* self.PD_POISSON_CONCRETE)*(1 + self.PD_POISSON_CONCRETE)))
         self.PD_E_CONCRETE = np.double(
             (12.00 * self.PD_K_CONCRETE) / (np.pi * np.power(self.PD_HORIZON, 4))) # TODO check that should be 12 and not 18, and check that delta is actually the material horizon
-        
         self.PD_S0_CONCRETE = 0.000533 # check this value
         
         self.PD_POISSON_STEEL = 0.3
         self.PD_YOUNGS_STEEL = 1.*210e9
         self.PD_G_STEEL = 78e9
         self.PD_DENSITY_STEEL = 8000.0
-        self.PD_CRIT_TSTRAIN_STEEL = 0.01 # What is this value for?
-        
         self.PD_K_STEEL = np.double(
                 self.PD_YOUNGS_STEEL / ((1 - 2* self.PD_POISSON_STEEL)*(1 + self.PD_POISSON_STEEL)))
         self.PD_E_STEEL = np.double(
             (12.00 * self.PD_K_STEEL) / (np.pi * np.power(self.PD_HORIZON, 4))) # check that delta is actually the material horizon
-        
         self.PD_S0_STEEL = 0.01 # check this value
         
-        # TODO check that horizon is the same for both materials
-
         # User input parameters
-        self.loadRate = np.double(0.00001)
+        self.loadRate = np.double(0.000001)
         self.crackLength = np.double(0.3)
-        self.dt = np.double(1e-3)
-        self.max_reaction = 0.1
+        self.dt = np.double(1e-18)
         self.volume_total = 3.0 * 0.6 * 0.25
-        self.load_scale_rate = 0.000001
+        self.max_reaction = self.PD_DENSITY_CONCRETE * self.volume_total * 9.81
+        self.load_scale_rate = 1e-6
+
+        # Average nodal volume
+        self.PD_FAMILY_VOLUME = 4./3 * np.pi * np.power(self.PD_HORIZON,3)
 
         # These parameters will eventually be passed to model via command line
         # arguments
@@ -84,6 +79,8 @@ class simpleSquare(MODEL):
 
         st = time.time()
         
+        self.setVolume()
+        
         # If the network has already been written to file, then read, if not, setNetwork
         try:
             self.read_network(self.networkFileName)
@@ -94,7 +91,7 @@ class simpleSquare(MODEL):
             "Building horizons took {} seconds. Horizon length: {}".format(
                 (time.time() - st), self.MAX_HORIZON_LENGTH))
         # self.setH() # Will further optimise the code, TODO
-        self.setVolume()
+        
         
 
         self.bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
@@ -133,7 +130,7 @@ class simpleSquare(MODEL):
             if bnd == 1:
                 pass
             elif bnd == -1:
-                self.force_bcvalues[i, 2] = np.float64(1.* bnd * self.max_reaction * load_scale / (self.num_force_bc_nodes * self.volume_total))
+                self.force_bcvalues[i, 2] = np.float64(1.* bnd * self.max_reaction * load_scale / (self.num_force_bc_nodes))
         
         print("number of boundary nodes", num_force_bc_nodes)
         print("total volume", self.total_volume)
@@ -145,21 +142,27 @@ class simpleSquare(MODEL):
         # -1 == DISPLACEMENT LOADED IN -ve direction
         #  1 == DISPLACEMENT LOADED IN +ve direction
         #  0 == FIXED (DIRICHLET) BOUNDARY
-        if self.meshFileName == 'test.msh' or 'debug3D.msh' or 'debug3D2.msh':
+        
+        # token problems
+        token_problems = ['test.msh', 'debug3D.msh', 'debug3D2.msh']
+        if self.meshFileName in token_problems:
             # Does not live on a boundary
             bnd = 2
             # Does live on boundary
             if x[0] < 1.5 * self.PD_HORIZON:
                 bnd = 0
-
-            #elif x[0] > 3.0 - 1.5 * self.PD_HORIZON:
-                #bnd = 1
+                
+            elif x[0] > 3.0 - 1.5 * self.PD_HORIZON:
+                bnd = 1
         elif self.meshFileName == '3300beam.msh':
             # Does not live on a bondary
             bnd = 2
             # Does live on boundary
             if x[0] < 1.5 * self.PD_HORIZON:
-                bnd = 0           
+                bnd = -1  
+            # Does live on boundary
+            if x[0] > 3.3 - 1.5 * self.PD_HORIZON:
+                bnd = 1
         return bnd
     
     def findForceBoundary(self, x):
@@ -169,14 +172,20 @@ class simpleSquare(MODEL):
         # -1 == FORCE LOADED IN -ve direction
         #  1 == FORCE LOADED IN +ve direction
         
-        if self.meshFileName == 'test.msh' or 'debug3D.msh' or 'debug3D2.msh':
+        if self.meshFileName == 'test.msh':
             # Does not live on a bondary
             bnd = 2
             if x[0] > 1.0 - 1.5 * self.PD_HORIZON:
                 bnd = 1
         elif self.meshFileName == '3300beam.msh':
-            # Does not live on a bondary
-            bnd = -1
+            # Does not live on boundary
+            bnd = 2
+# =============================================================================
+#             if x[0] > 3.3 - 1.5 * self.PD_HORIZON:
+#                 bnd = 1
+#             if x[0] < 1.5 * self.PD_HORIZON:
+#                 bnd = -1 
+# =============================================================================
 # =============================================================================
 #             delta = 1e-6
 #             if x[2] > 0.6 - delta:
@@ -288,10 +297,10 @@ def noise(L, samples, num_nodes):
     return np.transpose(noise)
 
 
-def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
+def sim(sample, myModel, numSteps=500, numSamples=1, print_every=10):
     
     print("Peridynamic Simulation -- Starting")
-    
+    print(myModel.PD_E_CONCRETE, myModel.PD_E_STEEL)
     # Initializing OpenCL
     context = cl.create_some_context()
     queue = cl.CommandQueue(context)
@@ -337,9 +346,15 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
     h_bctypes = myModel.bctypes
     h_bcvalues = myModel.bcvalues
     
+    print(h_bcvalues)
+    print(h_bctypes)
+    
     # Force boundary conditions types and values
     h_force_bctypes = myModel.force_bctypes
     h_force_bcvalues = myModel.force_bcvalues
+    
+    print(h_force_bctypes)
+    print(h_force_bcvalues)
 
     # Nodal volumes
     h_vols = myModel.V
@@ -460,22 +475,17 @@ def sim(sample, myModel, numSteps=1000, numSamples=1, print_every=1):
             vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
                       myModel.coords, h_damage, h_un1)
         
-        load_scale = min(1.0, myModel.load_scale_rate * t)
-        temp_value = -1. * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes * myModel.volume_total)
-        # update the host force_bcvalues
-        h_force_bcvalues = temp_value * np.ones((myModel.nnodes, myModel.DPN), dtype=np.float64)
-
 # =============================================================================
-#         for i in range(0, myModel.nnodes):
-#             bnd = myModel.findForceBoundary(myModel.coords[i][:])
-#             if bnd == -1:
-#                 h_force_bcvalues[i, 2] = np.float64(temp_value)
+#         load_scale = min(1.0, myModel.load_scale_rate * t)
+#         temp_value = -1. * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes)
+#         # update the host force_bcvalues
+#         h_force_bcvalues = temp_value * np.ones((myModel.nnodes, myModel.DPN), dtype=np.float64)
+# 
+#         # update the GPU force_bcvalues
+#         d_force_bcvalues = cl.Buffer(context,
+#                            cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+#                            hostbuf=h_force_bcvalues)
 # =============================================================================
-        
-        # update the GPU force_bcvalues
-        d_force_bcvalues = cl.Buffer(context,
-                           cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
-                           hostbuf=h_force_bcvalues)
 
         print('Timestep {} complete in {} s '.format(t, time.time() - st))
 

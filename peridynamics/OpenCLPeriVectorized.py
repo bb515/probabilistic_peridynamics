@@ -166,7 +166,7 @@ class SeqModel:
             self.MAX_HORIZON_LENGTH = MAX_HORIZON_LENGTH
             self.nnodes = nnodes
             
-            initiate_crack = 1
+            initiate_crack = 0
             # Initiate crack
             if initiate_crack == 1:
                 for i in range(0, self.nnodes):
@@ -288,7 +288,9 @@ class SeqModel:
                         elif material_flag == 'concrete':
                             tmp2.append(self.PD_E_CONCRETE)
                             tmp3.append(self.PD_S0_CONCRETE)
-                        
+            
+            
+            
             family.append(np.zeros(len(tmp), dtype=np.intc))
             bond_stiffness_family.append(np.zeros(len(tmp2), dtype=np.float64))
             bond_critical_stretch_family.append(np.zeros(len(tmp3), dtype=np.float64))
@@ -299,6 +301,7 @@ class SeqModel:
                 family[i][j] = np.intc(tmp[j])
                 bond_stiffness_family[i][j] = np.float64(tmp2[j])
                 bond_critical_stretch_family[i][j] = np.float64(tmp3[j])
+            
         
         assert len(family) == self.nnodes
         # As numpy array
@@ -307,6 +310,38 @@ class SeqModel:
         # Do the bond critical ste
         self.bond_critical_stretch_family = np.array(bond_critical_stretch_family)
         self.bond_stiffness_family = np.array(bond_stiffness_family)
+        
+# =============================================================================
+#         # Calculate stiffening factor - surface corrections for 3D problem, for this we need family matrix
+#         for i in range(0, self.nnodes):
+#             len(family[i]) = nnodes_i_family
+#             nodei_family_volume = nnodes_i_family * self.PD_NODE_VOLUME_AVERAGE # Possible to calculate more exactly, we have the volumes for free
+#             for j in range(len(family[i])):
+#                 nnodes_j_family = len(family[j])
+#                 nodej_family_volume = nnodes_j_family* self.PD_NODE_VOLUME_AVERAGE # Possible to calculate more exactly, we have the volumes for free
+#                 
+#                 stiffening_factor = 2.* self.PD_FAMILY_VOLUME /  (nodej_family_volume + nodei_family_volume)
+#                 
+#                 bond_stiffness_family[i][j] *= stiffening_factor
+#         
+# =============================================================================
+        self.family_v = np.zeros(self.nnodes)
+        for i in range(0, self.nnodes):
+            tmp = 0 # tmp family volume
+            family_list = family[i]
+            for j in range(0, len(family_list)):
+                tmp += self.V[family_list[j]]
+            self.family_v[i] = tmp
+            
+        # Calculate stiffening factor nore accurately using actual nodal volumes
+        for i in range(0, self.nnodes):
+            family_list = family[i]
+            nodei_family_volume = self.family_v[i] # Possible to calculate more exactly, we have the volumes for free
+            for j in range(len(family_list)):
+                nodej_family_volume = self.family_v[j]
+                stiffening_factor = 2.* self.PD_FAMILY_VOLUME /  (nodej_family_volume + nodei_family_volume)
+                print('Stiffening factor {}'.format(stiffening_factor))
+                bond_stiffness_family[i][j] *= stiffening_factor
         
         # Maximum number of nodes that any one of the nodes is connected to
         self.MAX_HORIZON_LENGTH = np.intc(
