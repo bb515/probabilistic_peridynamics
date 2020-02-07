@@ -16,6 +16,7 @@ import numpy as np
 import vtk as vtk
 import time
 import pyopencl as cl
+import matplotlib.pyplot as plt
 
 
 class simpleSquare(MODEL):
@@ -59,12 +60,13 @@ class simpleSquare(MODEL):
         self.PD_S0_STEEL = 0.01 # check this value
         
         # User input parameters
-        self.loadRate = np.double(0.000001)
+        self.loadRate = np.double(1e-5)
         self.crackLength = np.double(0.3)
-        self.dt = np.double(1e-18)
+        self.dt = np.double(1e-14)
         self.volume_total = 3.0 * 0.6 * 0.25
-        self.max_reaction = self.PD_DENSITY_CONCRETE * self.volume_total * 9.81
-        self.load_scale_rate = 1e-6
+        self.self_weight = 1.*self.PD_DENSITY_CONCRETE * self.volume_total * 9.81
+        self.max_reaction = 1e6*self.PD_DENSITY_CONCRETE * self.volume_total * 9.81
+        self.load_scale_rate = 1./100 # the denominator is the number of timesteps over which the load is applied
 
         # Average nodal volume
         self.PD_FAMILY_VOLUME = 4./3 * np.pi * np.power(self.PD_HORIZON,3)
@@ -97,14 +99,16 @@ class simpleSquare(MODEL):
         self.bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
         self.bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
 
-        # Find the boundary nodes and apply the displacement values
-        for i in range(0, self.nnodes):
-            bnd = self.findDisplacementBoundary(self.coords[i][:])
-            self.bctypes[i, 0] = np.intc((bnd))
-            self.bctypes[i, 1] = np.intc((bnd))
-            self.bctypes[i, 2] = np.intc((bnd))
-            self.bcvalues[i, 0] = np.float64(bnd * 0.5 * self.loadRate)
-        
+# =============================================================================
+#         # Find the boundary nodes and apply the displacement values
+#         for i in range(0, self.nnodes):
+#             bnd = self.findDisplacementBoundary(self.coords[i][:])
+#             self.bctypes[i, 0] = np.intc((bnd))
+#             self.bctypes[i, 1] = np.intc((bnd))
+#             self.bctypes[i, 2] = np.intc((bnd))
+#             self.bcvalues[i, 0] = np.float64(bnd * 0.5 * self.loadRate)
+#         
+# =============================================================================
         self.force_bctypes = np.zeros((self.nnodes, self.DPN), dtype=np.intc)
         self.force_bcvalues = np.zeros((self.nnodes, self.DPN), dtype=np.float64)
         
@@ -159,10 +163,12 @@ class simpleSquare(MODEL):
             bnd = 2
             # Does live on boundary
             if x[0] < 1.5 * self.PD_HORIZON:
-                bnd = -1  
+                bnd = 0 
             # Does live on boundary
-            if x[0] > 3.3 - 1.5 * self.PD_HORIZON:
-                bnd = 1
+# =============================================================================
+#             if x[0] > 3.3 - 1.5 * self.PD_HORIZON:
+#                 bnd = 1
+# =============================================================================
         return bnd
     
     def findForceBoundary(self, x):
@@ -178,19 +184,12 @@ class simpleSquare(MODEL):
             if x[0] > 1.0 - 1.5 * self.PD_HORIZON:
                 bnd = 1
         elif self.meshFileName == '3300beam.msh':
-            # Does not live on boundary
+            # Does live on boundary
             bnd = 2
-# =============================================================================
-#             if x[0] > 3.3 - 1.5 * self.PD_HORIZON:
-#                 bnd = 1
-#             if x[0] < 1.5 * self.PD_HORIZON:
-#                 bnd = -1 
-# =============================================================================
-# =============================================================================
-#             delta = 1e-6
-#             if x[2] > 0.6 - delta:
-#                 bnd = -1
-# =============================================================================
+            delta = 0.1
+            if x[2] > 0.6 - delta:
+                if x[0] > 1.65:
+                    bnd = -1
         return bnd
 
     def isRebar(self, p):
@@ -297,7 +296,16 @@ def noise(L, samples, num_nodes):
     return np.transpose(noise)
 
 
-def sim(sample, myModel, numSteps=500, numSamples=1, print_every=10):
+def sim(sample, myModel, lR, numSteps=1000000, numSamples=1, print_every=5000):
+    myModel.load_scale_rate= np.double(lR)
+    
+ # Find the boundary nodes and apply the displacement values
+    for i in range(0, myModel.nnodes):
+        bnd = myModel.findDisplacementBoundary(myModel.coords[i][:])
+        myModel.bctypes[i, 0] = np.intc((bnd))
+        myModel.bctypes[i, 1] = np.intc((bnd))
+        myModel.bctypes[i, 2] = np.intc((bnd))
+        myModel.bcvalues[i, 0] = np.float64(bnd * 0.5 * myModel.loadRate)
     
     print("Peridynamic Simulation -- Starting")
     print(myModel.PD_E_CONCRETE, myModel.PD_E_STEEL)
@@ -443,6 +451,7 @@ def sim(sample, myModel, numSteps=500, numSamples=1, print_every=10):
 
     global_size = int(myModel.DPN * myModel.nnodes)
     cl_kernel_initial_values(queue, (global_size,), None, d_un, d_udn)
+    damage_data = []
     for t in range(1, numSteps):
 
         st = time.time()
@@ -471,21 +480,20 @@ def sim(sample, myModel, numSteps=500, numSamples=1, print_every=10):
                                        d_horizons_lengths)
             cl.enqueue_copy(queue, h_damage, d_damage)
             cl.enqueue_copy(queue, h_un1, d_un1)
-            print("Sum of all damage is", np.sum(h_damage))
+            damage_sum =  np.sum(h_damage)
+            damage_data.append(damage_sum)
             vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
                       myModel.coords, h_damage, h_un1)
         
-# =============================================================================
-#         load_scale = min(1.0, myModel.load_scale_rate * t)
-#         temp_value = -1. * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes)
-#         # update the host force_bcvalues
-#         h_force_bcvalues = temp_value * np.ones((myModel.nnodes, myModel.DPN), dtype=np.float64)
-# 
-#         # update the GPU force_bcvalues
-#         d_force_bcvalues = cl.Buffer(context,
-#                            cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
-#                            hostbuf=h_force_bcvalues)
-# =============================================================================
+        load_scale = min(1.0, myModel.load_scale_rate * t)
+        temp_value = -1. * myModel.max_reaction * load_scale / (myModel.num_force_bc_nodes)
+        # update the host force_bcvalues
+        h_force_bcvalues = temp_value * np.ones((myModel.nnodes, myModel.DPN), dtype=np.float64)
+
+        # update the GPU force_bcvalues
+        d_force_bcvalues = cl.Buffer(context,
+                           cl.mem_flags.READ_ONLY | cl.mem_flags.COPY_HOST_PTR,
+                           hostbuf=h_force_bcvalues)
 
         print('Timestep {} complete in {} s '.format(t, time.time() - st))
 
@@ -494,11 +502,16 @@ def sim(sample, myModel, numSteps=500, numSamples=1, print_every=10):
                                d_horizons, d_horizons_lengths)
     cl.enqueue_copy(queue, h_damage, d_damage)
     cl.enqueue_copy(queue, h_un, d_un)
-    vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
-              myModel.coords, h_damage, h_un)
-    return vtk.write("output/U_"+"sample"+str(sample)+".vtk",
-                     "Solution time step = "+str(t), myModel.coords, h_damage,
-                     h_un)
+
+    return(damage_data)
+    
+# =============================================================================
+#     vtk.write("output/U_"+"t"+str(t)+".vtk", "Solution time step = "+str(t),
+#               #myModel.coords, h_damage, h_un)
+#     return vtk.write("output/U_"+"sample"+str(sample)+".vtk",
+#                      "Solution time step = "+str(t), myModel.coords, h_damage,
+#                      h_un)
+# =============================================================================
 
 
 def main():
@@ -509,12 +522,18 @@ def main():
 
     st = time.time()
     thisModel = simpleSquare()
-    no_samples = 1
-    
-    for s in range(no_samples):
-        sim(s, thisModel)
+    #dt = [1e-13, 8e-14, 9e-14, 1.05e-13, 1.2e-13]
+    lR = [1e-3]
+    x_data = np.linspace(1, 100000, 99)
+    for s in range(len(lR)):
+        damage_data = sim(s, thisModel, lR[s])
+        plt.plot(x_data, damage_data, label = lR[s])
     print('TOTAL TIME REQUIRED {}'.format(time.time() - st))
-
+    
+    plt.legend()      
+    plt.title('damage over time')
+    plt.show()
+    
 
 if __name__ == "__main__":
     main()
